@@ -1,0 +1,20 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "/opt/cuda/include",
+        "${workspaceFolder}",
+        "${workspaceFolder}/build64_release",
+        "${workspaceFolder}/cpp3rdlib/**"
+      ],
+      "defines": [],
+      "compilerPath": "/opt/cuda/bin/nvcc",
+      "compileCommands": "${workspaceFolder}/build64_release/compile_commands.json",
+      "cStandard": "c23",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-x64"
+    }
+  ],
+  "version": 4
+}

@@ -1,0 +1,53 @@
+{
+  "files.associations": {
+    "*.ejs": "html",
+    "**/frontmatter.json": "jsonc",
+    "**/.frontmatter/config/*.json": "jsonc",
+    "*.json.liquid": "json",
+    "*.yaml.liquid": "yaml",
+    "*.md.liquid": "markdown",
+    "*.js.liquid": "liquid-javascript",
+    "*.css.liquid": "liquid-css",
+    "*.scss.liquid": "liquid-scss",
+    "*.err": "log",
+    "future": "cpp",
+    "*.tcc": "cpp",
+    "*.ipp": "cpp",
+    "*.inc": "cpp",
+    "streambuf": "cpp",
+    "any": "cpp",
+    "bitset": "cpp",
+    "memory": "cpp",
+    "random": "cpp",
+    "optional": "cpp",
+    "typeindex": "cpp",
+    "typeinfo": "cpp"
+  },
+  "python.analysis.extraPaths": [],
+  "cmake.ignoreCMakeListsMissing": true,
+  "clangd.arguments": [
+    "-j=32",
+    "--compile-commands-dir=${workspaceFolder}/build64_release",
+    "--completion-style=detailed",
+    "--clang-tidy",
+    "--header-insertion=iwyu",
+    "--background-index",
+    "--clang-tidy-checks=performance-*,bugprone-*",
+    "--suggest-missing-includes",
+    "--limit-results=0",
+    "--query-driver=/usr/bin/clang++",
+    "--all-scopes-completion",
+    "--pch-storage=memory",
+    "--enable-config",
+    "--pretty"
+  ],
+  "clangd.path": "/usr/bin/clangd",
+  "clang-format.executable": "/usr/bin/clang-format",
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "git.autoRepositoryDetection": true,
+  "pylint.enabled": true,
+  "python-envs.defaultEnvManager": "ms-python.python:system",
+  "cSpell.words": [
+    "gmax"
+  ]
+}
