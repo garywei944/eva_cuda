@@ -1,0 +1,16 @@
+version: "0.2"
+ignorePaths: []
+dictionaryDefinitions: []
+dictionaries: []
+words:
+  - cuda
+  - fabs
+  - gettime
+  - malloc
+  - matmul
+  - memcpy
+  - nsec
+  - srand
+  - timespec
+ignoreWords: []
+import: []
