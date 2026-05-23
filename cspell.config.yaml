@@ -10,6 +10,7 @@ words:
   - matmul
   - memcpy
   - nsec
+  - nvtx
   - srand
   - timespec
 ignoreWords: []
