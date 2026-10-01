@@ -19,7 +19,7 @@ __global__ void whoami(void) {
          threadIdx.z, thread_offset);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   const int b_x = 2, b_y = 3, b_z = 4;
   const int t_x = 4, t_y = 4, t_z = 4;
 

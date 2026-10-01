@@ -13,7 +13,7 @@
 #define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
 
 template <typename T>
-void check(T err, const char *const func, const char *const file,
+void check(T err, const char* const func, const char* const file,
            const int line) {
   if (err != cudaSuccess) {
     fprintf(stderr, "CUDA error at %s:%d code=%d(%s) \"%s\" \n", file, line,
@@ -22,13 +22,13 @@ void check(T err, const char *const func, const char *const file,
   }
 }
 
-__global__ void kernel1(float *data, int n) {
+__global__ void kernel1(float* data, int n) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid < n) {
     data[tid] *= 2.0f;
   }
 }
-__global__ void kernel2(float *data, int n) {
+__global__ void kernel2(float* data, int n) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid < n) {
     data[tid] += 1.0f;
@@ -36,7 +36,7 @@ __global__ void kernel2(float *data, int n) {
 }
 
 void CUDART_CB myStreamCallback(cudaStream_t stream, cudaError status,
-                                void *userData) {
+                                void* userData) {
   printf("Stream callback: Operation completed\n");
 }
 
@@ -49,8 +49,8 @@ int main(void) {
   std::cout << event << std::endl;
 
   // allocate memory
-  CHECK_CUDA_ERROR(cudaMallocHost((void **)&h_data, size));
-  CHECK_CUDA_ERROR(cudaMalloc((void **)&d_data, size));
+  CHECK_CUDA_ERROR(cudaMallocHost((void**)&h_data, size));
+  CHECK_CUDA_ERROR(cudaMalloc((void**)&d_data, size));
 
   // init array
   for (int i = 0; i < N; i++) {

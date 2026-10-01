@@ -12,7 +12,7 @@
 #define CHECK_CUDA_ERROR(val) check((val), #val, __FILE__, __LINE__)
 
 template <typename T>
-void check(T err, const char *const func, const char *const file,
+void check(T err, const char* const func, const char* const file,
            const int line) {
   if (err != cudaSuccess) {
     fprintf(stderr, "CUDA error at %s:%d code=%d(%s) \"%s\" \n", file, line,
@@ -21,7 +21,7 @@ void check(T err, const char *const func, const char *const file,
   }
 }
 
-__global__ void vectorAdd(const float *A, const float *B, float *C, int N) {
+__global__ void vectorAdd(const float* A, const float* B, float* C, int N) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid < N) {
     C[tid] = A[tid] + B[tid];
@@ -37,19 +37,19 @@ int main(void) {
   cudaStream_t stream1, stream2;
 
   // init host arrays
-  h_A = (float *)malloc(size);
-  h_B = (float *)malloc(size);
-  h_C = (float *)malloc(size);
+  h_A = (float*)malloc(size);
+  h_B = (float*)malloc(size);
+  h_C = (float*)malloc(size);
 
   for (int i = 0; i < N; i++) {
-    h_A[i] = rand_r() / (float)RAND_MAX;
-    h_B[i] = rand_r() / (float)RAND_MAX;
+    h_A[i] = rand() / (float)RAND_MAX;
+    h_B[i] = rand() / (float)RAND_MAX;
   }
 
   // init device arrays
-  CHECK_CUDA_ERROR(cudaMalloc((void **)&d_A, size));
-  CHECK_CUDA_ERROR(cudaMalloc((void **)&d_B, size));
-  CHECK_CUDA_ERROR(cudaMalloc((void **)&d_C, size));
+  CHECK_CUDA_ERROR(cudaMalloc((void**)&d_A, size));
+  CHECK_CUDA_ERROR(cudaMalloc((void**)&d_B, size));
+  CHECK_CUDA_ERROR(cudaMalloc((void**)&d_C, size));
 
   CHECK_CUDA_ERROR(cudaStreamCreate(&stream1));
   CHECK_CUDA_ERROR(cudaStreamCreate(&stream2));

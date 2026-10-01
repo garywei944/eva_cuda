@@ -10,7 +10,7 @@
 
 #define BLOCK_SIZE 16
 
-__global__ void matmulKernel(float *A, float *B, float *C, int N) {
+__global__ void matmulKernel(float* A, float* B, float* C, int N) {
   int row = blockIdx.y * blockDim.y + threadIdx.y;
   int col = blockIdx.x * blockDim.x + threadIdx.x;
   float sum = 0.0f;
@@ -23,7 +23,7 @@ __global__ void matmulKernel(float *A, float *B, float *C, int N) {
   }
 }
 
-void matmul(float *A, float *B, float *C, int N) {
+void matmul(float* A, float* B, float* C, int N) {
   nvtxRangePush("Matrix Multiplication");
 
   float *d_A, *d_B, *d_C;
@@ -63,9 +63,9 @@ void matmul(float *A, float *B, float *C, int N) {
 int main() {
   const int N = 1024;
 
-  float *A = new float[N * N];
-  float *B = new float[N * N];
-  float *C = new float[N * N];
+  float* A = new float[N * N];
+  float* B = new float[N * N];
+  float* C = new float[N * N];
 
   matmul(A, B, C, N);
 
