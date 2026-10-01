@@ -1,0 +1,3 @@
+# Strip nvcc-only flags from compile_commands.json that clang does not understand.
+CompileFlags:
+  Remove: [-forward-unknown-to-host-compiler, -arch=*]

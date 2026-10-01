@@ -1,122 +1,51 @@
-/*
- * Copyright (c) 2026 Gary Wei
- *
- * Licensed under the MIT
- * See LICENSE file in the project root for full license information.
- */
-
 #include <cuda_runtime.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
 
-#define M 256
-#define K 512
-#define N 256
-#define BLOCK_SIZE 32
+#include <cstdio>
 
-void matmul_cpu(float *A, float *B, float *C, int m, int k, int n) {
-  for (int i = 0; i < m; i++) {
-    for (int j = 0; j < n; j++) {
-      float sum = 0.0f;
-      for (int l = 0; l < k; l++) {
-        sum += A[i * k + l] * B[l * n + j];
-      }
-      C[i * n + j] = sum;
-    }
-  }
-}
+#include "eva_cuda/check.cuh"
 
-__global__ void matmul_gpu(float *A, float *B, float *C, int m, int k, int n) {
-  int row = blockIdx.y * blockDim.y + threadIdx.y;
-  int col = blockIdx.x * blockDim.x + threadIdx.x;
+#define M 4096
+#define K 2048
+#define N 1024
+#define BLOCK_SIZE 256
 
-  if (row < m && col < n) {
-    float sum = 0.0f;
-    for (int l = 0; l < k; l++) {
-      sum += A[row * k + l] * B[l * n + col];
-    }
-  }
-}
-
-void init_matrix(float *mat, int rows, int cols) {
-  for (int i = 0; i < rows * cols; i++) {
-    mat[i] = (float)rand() / RAND_MAX;
-  }
-}
-
-double gettime() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return ts.tv_sec + ts.tv_nsec * 1e-9;
-}
+__global__ void matmal(const float* A, const float* B, float* C, const int m,
+                       const int n, const int k) {}
 
 int main() {
-  float *h_A, *h_B, *h_C_cpu, *h_C_gpu;
+  float *h_A, *h_B, *h_C;
   float *d_A, *d_B, *d_C;
+
   size_t size_A = M * K * sizeof(float);
   size_t size_B = K * N * sizeof(float);
   size_t size_C = M * N * sizeof(float);
 
-  h_A = (float *)malloc(size_A);
-  h_B = (float *)malloc(size_B);
-  h_C_cpu = (float *)malloc(size_C);
-  h_C_gpu = (float *)malloc(size_C);
+  CUDA_CHECK(cudaMallocHost(&h_A, size_A));
+  CUDA_CHECK(cudaMallocHost(&h_B, size_B));
+  CUDA_CHECK(cudaMallocHost(&h_C, size_C));
 
-  srand(time(NULL));
-  init_matrix(h_A, M, K);
-  init_matrix(h_B, K, N);
+  CUDA_CHECK(cudaMalloc(&d_A, size_A));
+  CUDA_CHECK(cudaMalloc(&d_B, size_B));
+  CUDA_CHECK(cudaMalloc(&d_C, size_C));
 
-  cudaMalloc(&d_A, size_A);
-  cudaMalloc(&d_B, size_B);
-  cudaMalloc(&d_C, size_C);
+  CUDA_CHECK(cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice));
 
-  cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice);
+  dim3 threads(BLOCK_SIZE, BLOCK_SIZE);
+  dim3 blocks(M + BLOCK_SIZE - 1 / BLOCK_SIZE, N + BLOCK_SIZE - 1 / BLOCK_SIZE);
 
-  dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-  dim3 gridDim((N + BLOCK_SIZE - 1) / BLOCK_SIZE,
-               (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
+  matmal<<<blocks, threads>>>(d_A, d_B, d_C, M, N, K);
+  cudaDeviceSynchronize();
 
-  printf("Performing warm-up runs...\n");
-  for (int i = 0; i < 3; i++) {
-    matmul_cpu(h_A, h_B, h_C_cpu, M, K, N);
-    matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
-    cudaDeviceSynchronize();
-  }
+  CUDA_CHECK(cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost));
 
-  printf("Benchmarking CPU implementation\n");
-  double cpu_total_time = 0.0;
-  for (int i = 0; i < 20; i++) {
-    double start_time = gettime();
-    matmul_cpu(h_A, h_B, h_C_cpu, M, K, N);
-    double end_time = gettime();
-    cpu_total_time += end_time - start_time;
-  }
-  double cpu_avg_time = cpu_total_time / 20.0;
+  CUDA_CHECK(cudaFree(d_A));
+  CUDA_CHECK(cudaFree(d_B));
+  CUDA_CHECK(cudaFree(d_C));
 
-  printf("Benchmarking GPU implementation\n");
-  double gpu_total_time = 0.0;
-  for (int i = 0; i < 20; i++) {
-    double start_time = gettime();
-    matmul_gpu<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
-    cudaDeviceSynchronize();
-    double end_time = gettime();
-    gpu_total_time += end_time - start_time;
-  }
-  double gpu_avg_time = gpu_total_time / 20.0;
-
-  printf("CPU average time: %f ms\n", cpu_avg_time * 1e6f);
-  printf("GPU average time: %f ms\n", gpu_avg_time * 1e6f);
-  printf("Speedup: %fx\n", cpu_avg_time / gpu_avg_time);
-
-  free(h_A);
-  free(h_B);
-  free(h_C_cpu);
-  free(h_C_gpu);
-  cudaFree(d_A);
-  cudaFree(d_B);
-  cudaFree(d_C);
+  CUDA_CHECK(cudaFreeHost(h_A));
+  CUDA_CHECK(cudaFreeHost(h_B));
+  CUDA_CHECK(cudaFreeHost(h_C));
 
   return 0;
 }

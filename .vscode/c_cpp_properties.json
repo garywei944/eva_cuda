@@ -5,6 +5,7 @@
       "includePath": [
         "/opt/cuda/include",
         "${workspaceFolder}",
+        "${workspaceFolder}/include",
         "${workspaceFolder}/build64_release",
         "${workspaceFolder}/cpp3rdlib/**"
       ],
