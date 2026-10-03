@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 
 #include <cstdio>
+#include <cstdlib>
 
 #define CUDA_CHECK(expr_to_check)                                      \
   do {                                                                 \
