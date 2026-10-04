@@ -93,9 +93,39 @@ __inline__ __device__ float warpReduceSum(float val) {
 //   if (tid == 0) atomicAdd(y, sdata[0]);
 // }
 
+// template <int kBlockSize>
+// __global__ void vector_sum_gpu(const float* x, float* y, const int n) {
+//   // 0.686 ms
+//   static_assert(kBlockSize % 32 == 0, "Block size must be a multiple of 32");
+//   static_assert(kBlockSize <= 1024, "Block size must not exceed 1024");
+//   if (blockDim.x != kBlockSize) __trap();
+
+//   __shared__ float sdata[kBlockSize / 32];
+//   int tid = threadIdx.x;
+//   int gid = blockIdx.x * blockDim.x + tid;
+//   int lane = tid % 32;
+//   int wid = tid / 32;
+
+//   float val = 0.f;
+//   for (size_t idx = gid; idx < n; idx += gridDim.x * blockDim.x) {
+//     val += x[idx];
+//   }
+
+//   val = warpReduceSum(val);
+//   if (lane == 0) sdata[wid] = val;
+
+//   __syncthreads();
+
+//   if (wid == 0) {
+//     val = lane < kBlockSize / 32 ? sdata[lane] : 0.f;
+//     val = warpReduceSum(val);
+//     if (lane == 0) atomicAdd(y, val);
+//   }
+// }
+
 template <int kBlockSize>
 __global__ void vector_sum_gpu(const float* x, float* y, const int n) {
-  // 0.686 ms
+  // 0.682 ms
   static_assert(kBlockSize % 32 == 0, "Block size must be a multiple of 32");
   static_assert(kBlockSize <= 1024, "Block size must not exceed 1024");
   if (blockDim.x != kBlockSize) __trap();
@@ -107,8 +137,17 @@ __global__ void vector_sum_gpu(const float* x, float* y, const int n) {
   int wid = tid / 32;
 
   float val = 0.f;
-  for (size_t idx = gid; idx < n; idx += gridDim.x * blockDim.x) {
-    val += x[idx];
+  // for (size_t idx = gid; idx < n; idx += gridDim.x * blockDim.x) {
+  //   val += x[idx];
+  // }
+  const float4* x_f4 = reinterpret_cast<const float4*>(x);
+  for (size_t idx = gid; idx < n / 4; idx += gridDim.x * blockDim.x) {
+    val += x_f4[idx].x + x_f4[idx].y + x_f4[idx].z + x_f4[idx].w;
+  }
+
+  // handle reminder
+  if (n / 4 * 4 + gid < n) {
+    val += x[n / 4 * 4 + gid];
   }
 
   val = warpReduceSum(val);
