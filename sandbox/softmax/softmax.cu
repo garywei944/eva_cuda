@@ -1,3 +1,4 @@
+#include <cooperative_groups.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -18,11 +19,17 @@ constexpr int kWarmup = 3;
 constexpr int kRepeat = 20;
 
 // TODO(garywei944): kernels
+template <int threadsPerBlock>
+__global__ void softmax_kernel(const float* x, float* y, float2* buf,
+                               const int n) {
+  int tid = threadIdx.x;
+}
 
 // x, y are device pointers; partial is device scratch with `blocks` entries.
 void softmax_gpu(const float* x, float* y, float2* partial, const int n,
                  const int blocks) {
   // TODO(garywei944): launch kernels
+  softmax_kernel<BLOCK_SIZE><<<blocks, BLOCK_SIZE>>>(x, y, partial, n);
 }
 
 void softmax_cpu(const float* x, float* y, const int n) {
@@ -70,14 +77,13 @@ int main() {
   CUDA_CHECK(cudaMemcpy(d_x, h_x, size, cudaMemcpyHostToDevice));
 
   // Calculate grid size: as many blocks as can be resident at once
-  int numSMs, maxThreadsPerSM;
+  int numSMs, blocksPerSM;
   CUDA_CHECK(
       cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0));
-  CUDA_CHECK(cudaDeviceGetAttribute(&maxThreadsPerSM,
-                                    cudaDevAttrMaxThreadsPerMultiProcessor, 0));
-  int blocks = numSMs * (maxThreadsPerSM / BLOCK_SIZE);
-  printf("numSMs: %d, blockPerSM: %d, blocks: %d\n", numSMs,
-         maxThreadsPerSM / BLOCK_SIZE, blocks);
+  CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &blocksPerSM, softmax_kernel<BLOCK_SIZE>, BLOCK_SIZE, 0));
+  printf("numSMs: %d, blockPerSM: %d\n", numSMs, blockPerSM);
+  int blocks = numSMs * blocksPerSM * 2;
 
   CUDA_CHECK(cudaMalloc(&d_partial, blocks * sizeof(float2)));
 
