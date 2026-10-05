@@ -1,3 +1,6 @@
 # Strip nvcc-only flags from compile_commands.json that clang does not understand.
+# CUDA 13 moved CCCL (cuda/std, thrust, cub) to include/cccl; nvcc adds it via
+# nvcc.profile, but clang's CUDA driver does not.
 CompileFlags:
-  Remove: [-forward-unknown-to-host-compiler, -arch=*]
+  Remove: [-forward-unknown-to-host-compiler, -arch=*, -G]
+  Add: [-isystem/opt/cuda/include/cccl]

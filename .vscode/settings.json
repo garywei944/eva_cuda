@@ -27,7 +27,7 @@
   "cmake.ignoreCMakeListsMissing": true,
   "clangd.arguments": [
     "-j=32",
-    "--compile-commands-dir=${workspaceFolder}/build64_release",
+    "--compile-commands-dir=${workspaceFolder}/build64_debug",
     "--completion-style=detailed",
     "--clang-tidy",
     "--header-insertion=iwyu",
