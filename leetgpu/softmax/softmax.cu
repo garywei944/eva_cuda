@@ -18,8 +18,9 @@ namespace cg = cooperative_groups;
 
 // constexpr size_t N = 1 << 26;
 constexpr size_t N = 1 << 10;
-constexpr int kWarmup = 3;
-constexpr int kRepeat = 20;
+// Debugging: run GPU and CPU once each. Benchmark: kWarmup 3, kRepeat 20.
+constexpr int kWarmup = 0;
+constexpr int kRepeat = 1;
 
 __inline__ __device__ float warpReduceMax(float val) {
   val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 16, 32));
@@ -48,26 +49,21 @@ __inline__ __device__ float2 merge(float2 a, float2 b) {
     a = b;
     b = t;
   }
-  if (b.x == -INFINITY) {
-    // first element
-    a.y = 1.f;
-  } else {
-    float delta = a.x - b.x;
-    a.y = b.y / expf(delta) + 1.f;
-  }
+  if (b.x == -INFINITY) return a;
+  a.y += b.y * expf(b.x - a.x);
   return a;
 }
 
 __inline__ __device__ float2 warpMergeMaxSum(float2* input, int size) {
-  int tid = threadIdx.x;
+  int lane = threadIdx.x % 32;
 
-  float local_max = tid < size ? input[tid].x : -INFINITY;
+  float local_max = lane < size ? input[lane].x : -INFINITY;
   float local_sum;
   float global_max = warpReduceMax(local_max);
   if (local_max == -INFINITY)
     local_sum = 0.f;
   else
-    local_sum = input[tid].y / expf(global_max - local_max);
+    local_sum = input[lane].y / expf(global_max - local_max);
   float global_sum = warpReduceSum(local_sum);
   return make_float2(global_max, global_sum);
 }
@@ -113,10 +109,6 @@ __global__ void softmax_kernel(const float* x, float* y, float2* global_buf,
   float2 local = make_float2(-INFINITY, 0.f);
   for (int i = gid; i < n; i += stride) {
     local = merge(local, make_float2(x[i], 1.f));
-    if (gid == 0) {
-      printf("i: %d\n", i);
-      printf("local: (%f, %f)\n", local.x, local.y);
-    }
   }
   // warp local max
   float warp_max = warpReduceMax(local.x);
@@ -137,16 +129,15 @@ __global__ void softmax_kernel(const float* x, float* y, float2* global_buf,
   float2 global =
       blockMergeMaxSum(global_buf, gridDim.x, sdata, threadsPerBlock / 32);
 
-  // compute output
-  if (gid < n) {
-    y[gid] = expf(x[gid] - global.x) / global.y;
+  // compute output (grid-stride: n can exceed the number of threads)
+  for (int i = gid; i < n; i += stride) {
+    y[i] = expf(x[i] - global.x) / global.y;
   }
 }
 
 // x, y are device pointers; partial is device scratch with `blocks` entries.
 void softmax_gpu(const float* x, float* y, float2* partial, const int n,
                  const int blocks) {
-  // TODO(garywei944): launch kernels
   // softmax_kernel<BLOCK_SIZE><<<blocks, BLOCK_SIZE>>>(x, y, partial, n);
   void* args[] = {&x, &y, &partial, (void*)&n};
   CUDA_CHECK(cudaLaunchCooperativeKernel(softmax_kernel<BLOCK_SIZE>, blocks,
@@ -160,15 +151,16 @@ void softmax_cpu(const float* x, float* y, const int n) {
     max_val = std::fmax(max_val, x[i]);
   }
 
-  // pass 2: sum of exp(x - max)
+  // pass 2: sum of exp(x - max); double, since a float running sum over
+  // millions of small terms drops most of each addition
   double sum = 0.0;
   for (int i = 0; i < n; i++) {
-    sum += std::exp(x[i] - max_val);
+    sum += expf(x[i] - max_val);
   }
 
   // pass 3: normalize
   for (int i = 0; i < n; i++) {
-    y[i] = std::exp(x[i] - max_val) / sum;
+    y[i] = expf(x[i] - max_val) / sum;
   }
 }
 
