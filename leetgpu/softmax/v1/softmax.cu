@@ -2,7 +2,6 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
-#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -18,99 +17,129 @@
 namespace cg = cooperative_groups;
 
 // constexpr size_t N = 1 << 26;
-constexpr size_t N = 1 << 28;
+constexpr size_t N = 1 << 10;
 // Debugging: run GPU and CPU once each. Benchmark: kWarmup 3, kRepeat 20.
 constexpr int kWarmup = 0;
 constexpr int kRepeat = 1;
 
+__inline__ __device__ float warpReduceMax(float val) {
+  val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 16, 32));
+  val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 8, 32));
+  val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 4, 32));
+  val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 2, 32));
+  val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, 1, 32));
+  return val;
+}
+
+__inline__ __device__ float warpReduceSum(float val) {
+  val += __shfl_xor_sync(0xffffffff, val, 16, 32);
+  val += __shfl_xor_sync(0xffffffff, val, 8, 32);
+  val += __shfl_xor_sync(0xffffffff, val, 4, 32);
+  val += __shfl_xor_sync(0xffffffff, val, 2, 32);
+  val += __shfl_xor_sync(0xffffffff, val, 1, 32);
+  return val;
+}
+
 __inline__ __device__ float2 merge(float2 a, float2 b) {
-  float m = fmaxf(a.x, b.x);
+  if (a.x == -INFINITY && b.x == -INFINITY) return a;
 
-  if (m == -INFINITY) return make_float2(-INFINITY, 0.f);
-
-  return make_float2(m, a.y * expf(a.x - m) + b.y * expf(b.x - m));
+  // assume a.x larger
+  if (a.x < b.x) {
+    float2 t = a;
+    a = b;
+    b = t;
+  }
+  if (b.x == -INFINITY) return a;
+  a.y += b.y * expf(b.x - a.x);
+  return a;
 }
 
-__inline__ __device__ float2 warp_reduce_max_sum(float2 val) {
-  assert(val.x != -INFINITY || val.y == 0.f);  // m==-inf => s==0
-  assert(val.x == -INFINITY || val.y > 0.f);   // m!=-inf => s>0
+__inline__ __device__ float2 warpMergeMaxSum(float2* input, int size) {
+  int lane = threadIdx.x % 32;
 
-  float m = val.x, s = val.y;
-
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1)
-    m = fmaxf(m, __shfl_xor_sync(0xffffffff, m, offset));
-
-  if (s > 0.f) s *= expf(val.x - m);
-
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1)
-    s += __shfl_xor_sync(0xffffffff, s, offset);
-
-  return make_float2(m, s);
+  float local_max = lane < size ? input[lane].x : -INFINITY;
+  float local_sum;
+  float global_max = warpReduceMax(local_max);
+  if (local_max == -INFINITY)
+    local_sum = 0.f;
+  else
+    local_sum = input[lane].y / expf(global_max - local_max);
+  float global_sum = warpReduceSum(local_sum);
+  return make_float2(global_max, global_sum);
 }
 
+__inline__ __device__ float2 blockMergeMaxSum(float2* input, int input_size,
+                                              float2* sdata, int sdata_size) {
+  int tid = threadIdx.x;
+  int lane = tid % 32;
+  int wid = tid / 32;
+
+  // block stride loop
+  float2 local = make_float2(-INFINITY, 0.f);
+  for (int i = tid; i < input_size; i += blockDim.x) {
+    local = merge(local, input[i]);
+  }
+  float warp_max = warpReduceMax(local.x);
+  if (local.y != 0.f) local.y /= expf(warp_max - local.x);
+  float warp_sum = warpReduceSum(local.y);
+  if (lane == 0) sdata[wid] = make_float2(warp_max, warp_sum);
+
+  __syncthreads();
+
+  return warpMergeMaxSum(sdata, sdata_size);
+}
+
+// TODO(garywei944): kernels
 template <int threadsPerBlock>
-__global__ void softmax_kernel(const float* x, float* y, const int n,
-                               float2* g_block_max_sum, const int blocks) {
-  static_assert(threadsPerBlock % 32 == 0,
-                "threadsPerBlock must be a multiple of 32");
-  __shared__ float2 s_warp_max_sum[threadsPerBlock / 32];
+__global__ void softmax_kernel(const float* x, float* y, float2* global_buf,
+                               const int n) {
+  // all warp sum and warp max.
+  __shared__ float2 sdata[threadsPerBlock / 32];
 
   auto grid = cg::this_grid();
 
   int tid = threadIdx.x;
   int bid = blockIdx.x;
   int gid = bid * blockDim.x + tid;
-  int stride = gridDim.x * blockDim.x;
   int lane = tid % 32;
   int wid = tid / 32;
+  int stride = gridDim.x * blockDim.x;
 
-  float2 thread_max_sum = make_float2(-INFINITY, 0.f);
+  // 1. grid stride loop and reduce to get #blocks max and scaled sum
+  float2 local = make_float2(-INFINITY, 0.f);
   for (int i = gid; i < n; i += stride) {
-    thread_max_sum = merge(thread_max_sum, make_float2(x[i], 1.f));
+    local = merge(local, make_float2(x[i], 1.f));
   }
+  // warp local max
+  float warp_max = warpReduceMax(local.x);
+  if (local.y != 0.f) local.y /= expf(warp_max - local.x);
+  float warp_sum = warpReduceSum(local.y);
+  if (lane == 0) sdata[wid] = make_float2(warp_max, warp_sum);
 
-  float2 warp_max_sum = warp_reduce_max_sum(thread_max_sum);
-  if (lane == 0) s_warp_max_sum[wid] = warp_max_sum;
+  // sync sdata
   __syncthreads();
 
   if (wid == 0) {
-    warp_max_sum = lane < threadsPerBlock / 32 ? s_warp_max_sum[lane]
-                                               : make_float2(-INFINITY, 0.f);
-    float2 block_max_sum = warp_reduce_max_sum(warp_max_sum);
-
-    // Write B float2 to global memory
-    if (lane == 0) g_block_max_sum[bid] = block_max_sum;
+    auto block_max_sum = warpMergeMaxSum(sdata, threadsPerBlock / 32);
+    if (lane == 0) global_buf[bid] = block_max_sum;
   }
 
   grid.sync();
 
-  // each block compute the max and sum of all g_block_max_sum
-  thread_max_sum = make_float2(-INFINITY, 0.f);
-  for (int i = tid; i < blocks; i += threadsPerBlock) {
-    // B blocks each read B float2 from global memory
-    thread_max_sum = merge(thread_max_sum, g_block_max_sum[i]);
-  }
+  float2 global =
+      blockMergeMaxSum(global_buf, gridDim.x, sdata, threadsPerBlock / 32);
 
-  warp_max_sum = warp_reduce_max_sum(thread_max_sum);
-  if (lane == 0) s_warp_max_sum[wid] = warp_max_sum;
-  __syncthreads();
-
-  warp_max_sum = lane < threadsPerBlock / 32 ? s_warp_max_sum[lane]
-                                             : make_float2(-INFINITY, 0.f);
-  float2 global_max_sum = warp_reduce_max_sum(warp_max_sum);
-
+  // compute output (grid-stride: n can exceed the number of threads)
   for (int i = gid; i < n; i += stride) {
-    y[i] = expf(x[i] - global_max_sum.x) / global_max_sum.y;
+    y[i] = expf(x[i] - global.x) / global.y;
   }
 }
 
-// x, y are device pointers; d_block_max_sum is device scratch with `blocks`
-// entries.
-void softmax_gpu(const float* x, float* y, float2* d_block_max_sum, const int n,
+// x, y are device pointers; partial is device scratch with `blocks` entries.
+void softmax_gpu(const float* x, float* y, float2* partial, const int n,
                  const int blocks) {
-  void* args[] = {&x, &y, (void*)&n, &d_block_max_sum, (void*)&blocks};
+  // softmax_kernel<BLOCK_SIZE><<<blocks, BLOCK_SIZE>>>(x, y, partial, n);
+  void* args[] = {&x, &y, &partial, (void*)&n};
   CUDA_CHECK(cudaLaunchCooperativeKernel(softmax_kernel<BLOCK_SIZE>, blocks,
                                          BLOCK_SIZE, args, 0, 0));
 }
@@ -141,7 +170,7 @@ int main() {
 
   float *h_x, *h_y_gpu;
   float *d_x, *d_y;
-  float2* d_block_max_sum;
+  float2* d_partial;
   std::vector<float> h_y_cpu(N);
 
   size_t size = N * sizeof(float);
@@ -169,7 +198,7 @@ int main() {
   printf("numSMs: %d, blockPerSM: %d\n", numSMs, blocksPerSM);
   int blocks = numSMs * blocksPerSM;
 
-  CUDA_CHECK(cudaMalloc(&d_block_max_sum, blocks * sizeof(float2)));
+  CUDA_CHECK(cudaMalloc(&d_partial, blocks * sizeof(float2)));
 
   // benchmark gpu kernels
   L2Flusher l2;
@@ -185,7 +214,7 @@ int main() {
     l2.flush();
 
     CUDA_CHECK(cudaEventRecord(start));
-    softmax_gpu(d_x, d_y, d_block_max_sum, N, blocks);
+    softmax_gpu(d_x, d_y, d_partial, N, blocks);
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
     CUDA_CHECK(cudaGetLastError());
@@ -249,7 +278,7 @@ int main() {
 
   CUDA_CHECK(cudaFree(d_x));
   CUDA_CHECK(cudaFree(d_y));
-  CUDA_CHECK(cudaFree(d_block_max_sum));
+  CUDA_CHECK(cudaFree(d_partial));
 
   CUDA_CHECK(cudaFreeHost(h_x));
   CUDA_CHECK(cudaFreeHost(h_y_gpu));
