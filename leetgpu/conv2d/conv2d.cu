@@ -13,9 +13,12 @@
 
 // Debugging: the LeetGPU example (3x3 input, 2x2 kernel -> 2x2 output), run
 // once. Benchmark: kUseExample false, kWarmup 3, kRepeat 20.
-constexpr bool kUseExample = true;
-constexpr int kWarmup = 0;
-constexpr int kRepeat = 1;
+constexpr bool kUseExample = false;
+constexpr int kWarmup = 3;
+constexpr int kRepeat = 20;
+// The CPU reference is slow at full size: fixed, fewer runs.
+constexpr int kCpuWarmup = 1;
+constexpr int kCpuRepeat = 3;
 
 // Random problem size used when kUseExample is false (LeetGPU limits: input
 // up to 3072x3072, kernel up to 31x31).
@@ -24,79 +27,46 @@ constexpr int kInputCols = 3072;
 constexpr int kKernelRows = 31;
 constexpr int kKernelCols = 31;
 
+__constant__ float c_kernel[31 * 31];
+
 // ---------------------------- LeetGPU solution ----------------------------
-
-__inline__ __device__ float warp_reduce_sum(float val) {
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1)
-    val += __shfl_xor_sync(0xffffffff, val, offset);
-  return val;
-}
-
-__inline__ __device__ float block_reduce_sum(float val, float* buf) {
-  int tid = threadIdx.y * blockDim.x * threadIdx.x;
-  int wid = tid / 32;
-  int lane = tid % 32;
-
-  val = warp_reduce_sum(val);
-  __syncthreads();
-  if (lane == 0) buf[wid] = val;
-  __syncthreads();
-  val = buf[lane];
-  val = warp_reduce_sum(val);
-
-  return val;
-}
-
 __global__ void conv_2d_kernel(const float* input, const float* kernel,
                                float* output, int input_rows, int input_cols,
                                int kernel_rows, int kernel_cols) {
-  __shared__ float s_sum[32];
-  __shared__ float s_kernel[32 * 32];
+  int o_row = blockIdx.y * blockDim.y + threadIdx.y;
+  int o_col = blockIdx.x * blockDim.x + threadIdx.x;
 
   int output_rows = input_rows - kernel_rows + 1;
   int output_cols = input_cols - kernel_cols + 1;
 
-  // read the kernel to the shared memory
-  if (threadIdx.y < kernel_rows && threadIdx.x < kernel_cols) {
-    s_kernel[threadIdx.y * 32 + threadIdx.x] =
-        kernel[threadIdx.y * kernel_cols + threadIdx.x];
-  }
+  if (o_row < output_rows && o_col < output_cols) {
+    float s = 0.f;
+    for (int i = 0; i < kernel_rows; i++) {
+      for (int j = 0; j < kernel_cols; j++) {
+        int i_row = o_row + i;
+        int i_col = o_col + j;
 
-  float s = 0.f;
-  for (int i = 0; i < blockDim.y; i++) {
-    for (int j = 0; j < blockDim.x; j++) {
-      int o_row = blockIdx.y * blockDim.y + i;
-      int o_col = blockIdx.x * blockDim.x + j;
-
-      // block-wise return
-      if (o_row >= output_rows || o_col >= output_cols) continue;
-
-      int i_row = o_row + threadIdx.y;
-      int i_col = o_col + threadIdx.x;
-
-      float i_val = i_row < input_rows && i_col < input_cols
-                        ? input[i_row * input_cols + i_col]
-                        : 0.f;
-
-      s = i_val * s_kernel[threadIdx.y * 32 + threadIdx.x];
-
-      s = block_reduce_sum(s, s_sum);
-
-      if (threadIdx.x == 0 && threadIdx.y == 0)
-        output[o_row * output_cols + o_col] = s;
+        if (i_row < input_rows && i_col < input_cols) {
+          s +=
+              input[i_row * input_cols + i_col] * c_kernel[i * kernel_cols + j];
+        }
+      }
     }
+    output[o_row * output_cols + o_col] = s;
   }
 }
 
-template <int KERNEL_ROWS, int KERNEL_COLS>
 void conv_2d(const float* input, const float* kernel, float* output,
              int input_rows, int input_cols, int kernel_rows, int kernel_cols) {
   int output_rows = input_rows - kernel_rows + 1;
   int output_cols = input_cols - kernel_cols + 1;
-  dim3 threads(KERNEL_COLS, KERNEL_ROWS);
-  dim3 blocks((output_cols + KERNEL_COLS - 1) / KERNEL_COLS,
-              (output_rows + KERNEL_ROWS - 1) / KERNEL_ROWS);
+
+  dim3 threads(16, 16);
+  dim3 blocks((output_cols + 15) / 16, (output_rows + 15) / 16);
+
+  CUDA_CHECK(cudaMemcpyToSymbol(c_kernel, kernel,
+                                sizeof(float) * kernel_cols * kernel_rows, 0,
+                                cudaMemcpyDeviceToDevice));
 
   conv_2d_kernel<<<blocks, threads>>>(input, kernel, output, input_rows,
                                       input_cols, kernel_rows, kernel_cols);
@@ -106,8 +76,8 @@ void conv_2d(const float* input, const float* kernel, float* output,
 extern "C" void solve(const float* input, const float* kernel, float* output,
                       int input_rows, int input_cols, int kernel_rows,
                       int kernel_cols) {
-  conv_2d<32, 32>(input, kernel, output, input_rows, input_cols, kernel_rows,
-                  kernel_cols);
+  conv_2d(input, kernel, output, input_rows, input_cols, kernel_rows,
+          kernel_cols);
   cudaDeviceSynchronize();
 }
 
@@ -221,8 +191,8 @@ int main() {
   printf("Median GPU time: %f ms\n", gpu_median_ms);
 
   std::vector<double> cpu_ms;
-  cpu_ms.reserve(kRepeat);
-  for (int i = -kWarmup; i < kRepeat; i++) {
+  cpu_ms.reserve(kCpuRepeat);
+  for (int i = -kCpuWarmup; i < kCpuRepeat; i++) {
     auto t0 = std::chrono::steady_clock::now();
     conv_2d_cpu(h_input.data(), h_kernel.data(), h_output_cpu.data(),
                 input_rows, input_cols, kernel_rows, kernel_cols);
@@ -234,7 +204,7 @@ int main() {
     }
   }
   std::sort(cpu_ms.begin(), cpu_ms.end());
-  double cpu_median_ms = cpu_ms[kRepeat / 2];
+  double cpu_median_ms = cpu_ms[kCpuRepeat / 2];
   printf("Median CPU time: %f ms\n", cpu_median_ms);
   printf("Speedup: %f\n", cpu_median_ms / gpu_median_ms);
 
